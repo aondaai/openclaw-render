@@ -329,10 +329,18 @@ func pollGatewayHealth() {
 	client := &http.Client{Timeout: 2 * time.Second}
 	for {
 		time.Sleep(1 * time.Second)
-		resp, err := client.Get("http://127.0.0.1:" + gatewayPort + "/openclaw")
+		req, err := http.NewRequest(http.MethodGet, "http://127.0.0.1:"+gatewayPort+"/healthz", nil)
+		if err != nil {
+			continue
+		}
+		if gatewayToken != "" {
+			req.Header.Set("Authorization", "Bearer "+gatewayToken)
+			req.Header.Set("X-OpenClaw-Token", gatewayToken)
+		}
+		resp, err := client.Do(req)
 		if err == nil {
 			resp.Body.Close()
-			if resp.StatusCode < 500 {
+			if resp.StatusCode >= 200 && resp.StatusCode < 400 {
 				if !gatewayReady.Load() {
 					log.Println("Gateway is ready")
 					gatewayReady.Store(true)
@@ -677,6 +685,24 @@ func stripProxyHeaders(r *http.Request) {
 	r.Host = "127.0.0.1:" + gatewayPort
 }
 
+func addGatewayAuth(r *http.Request) {
+	if gatewayToken == "" {
+		return
+	}
+	if r.Header.Get("Authorization") == "" {
+		r.Header.Set("Authorization", "Bearer "+gatewayToken)
+	}
+	if r.Header.Get("X-OpenClaw-Token") == "" {
+		r.Header.Set("X-OpenClaw-Token", gatewayToken)
+	}
+
+	q := r.URL.Query()
+	if q.Get("token") == "" {
+		q.Set("token", gatewayToken)
+		r.URL.RawQuery = q.Encode()
+	}
+}
+
 func handleProxy(w http.ResponseWriter, r *http.Request) {
 	// Check auth cookie (skip for health endpoint, already handled separately)
 	if !isValidAuthCookie(r) {
@@ -699,6 +725,7 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 
 	// Strip proxy headers so gateway sees requests as local
 	stripProxyHeaders(r)
+	addGatewayAuth(r)
 
 	// WebSocket upgrade
 	if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
