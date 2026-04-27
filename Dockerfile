@@ -15,10 +15,14 @@ FROM ghcr.io/openclaw/openclaw:${OPENCLAW_VERSION}
 # Base image ends with USER node; switch to root for setup
 USER root
 
-# Add packages for openclaw agent operations
+# Add packages for openclaw agent operations and Google Workspace tooling.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+  git \
   ripgrep \
   && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 https://github.com/googleworkspace/cli /opt/googleworkspace-cli \
+  && npm install -g @googleworkspace/cli
 
 # Add proxy
 COPY --from=proxy-builder /proxy-bin /usr/local/bin/proxy
@@ -29,6 +33,8 @@ RUN printf '#!/bin/sh\nexec node /app/dist/index.js "$@"\n' > /usr/local/bin/ope
 
 # Gateway is Node; match render.yaml / NODE_OPTIONS (override via Render env).
 ENV NODE_OPTIONS="--max-old-space-size=3072"
+ENV GOOGLE_WORKSPACE_CLI_CONFIG_DIR="/data/.config/gws"
+ENV GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND="file"
 
 ENV PORT=10000
 EXPOSE 10000

@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -97,6 +99,7 @@ func main() {
 	}
 
 	ensureDirs()
+	ensureGoogleWorkspaceSkills()
 	ensureConfigured()
 	// Must run every boot: onboard is skipped when config already exists on disk, but we still
 	// need to sync gateway.controlUi (allowedOrigins for Render hostname, etc.).
@@ -136,11 +139,77 @@ func main() {
 }
 
 func ensureDirs() {
-	for _, dir := range []string{stateDir, workspaceDir} {
+	for _, dir := range []string{stateDir, workspaceDir, stateDir + "/skills", "/data/.config/gws"} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			log.Printf("Warning: could not create %s: %v", dir, err)
 		}
 	}
+
+	homeOpenClaw := "/home/node/.openclaw"
+	if _, err := os.Lstat(homeOpenClaw); os.IsNotExist(err) {
+		if err := os.Symlink(stateDir, homeOpenClaw); err != nil {
+			log.Printf("Warning: could not symlink %s to %s: %v", homeOpenClaw, stateDir, err)
+		}
+	}
+}
+
+func ensureGoogleWorkspaceSkills() {
+	sourceRoot := "/opt/googleworkspace-cli/skills"
+	targetRoots := []string{stateDir + "/skills", "/home/node/.openclaw/skills"}
+	for _, targetRoot := range targetRoots {
+		if err := os.MkdirAll(targetRoot, 0755); err != nil {
+			log.Printf("Warning: could not create skill directory %s: %v", targetRoot, err)
+			continue
+		}
+		for _, name := range []string{"gws-shared", "gws-gmail", "gws-calendar"} {
+			source := sourceRoot + "/" + name
+			target := targetRoot + "/" + name
+			if _, err := os.Stat(source); err != nil {
+				log.Printf("Warning: Google Workspace skill source missing %s: %v", source, err)
+				continue
+			}
+			if err := copyDir(source, target); err != nil {
+				log.Printf("Warning: could not install Google Workspace skill %s into %s: %v", name, targetRoot, err)
+			}
+		}
+	}
+}
+
+func copyDir(source, target string) error {
+	return filepath.WalkDir(source, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel := strings.TrimPrefix(path, source)
+		dest := target + rel
+		if d.IsDir() {
+			return os.MkdirAll(dest, 0755)
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		return copyFile(path, dest, info.Mode())
+	})
+}
+
+func copyFile(source, target string, mode fs.FileMode) error {
+	in, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+		return err
+	}
+	out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
 }
 
 func ensureConfigured() {
